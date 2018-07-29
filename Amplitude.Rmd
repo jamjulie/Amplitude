@@ -1,0 +1,452 @@
+---
+title: "Amplitude"
+author: "Julie Jung"
+date: "July 23, 2018"
+output:
+  pdf_document: default
+  html_document:
+    df_print: paged
+editor_options: 
+  chunk_output_type: console
+---
+
+Data analysis from amplitude experiment (conducted 2016 to 2017)
+
+```{r}
+setwd('/Users/juliejung/Documents/GitHub/Amplitude') 
+```
+
+#Load libraries
+```{r}
+library(ggplot2)
+library(MASS)
+library(multcomp)
+library("stargazer")
+library("knitr")
+library("dplyr")
+library(sciplot) 
+library(aod)
+library(lme4)
+library(cowplot)
+library(wesanderson)
+```
+
+#Functions
+```{r}
+## Gives count, mean, standard deviation, standard error of the mean, and confidence interval (default 95%).
+##   data: a data frame.
+##   measurevar: the name of a column that contains the variable to be summariezed
+##   groupvars: a vector containing names of columns that contain grouping variables
+##   na.rm: a boolean that indicates whether to ignore NA's
+##   conf.interval: the percent range of the confidence interval (default is 95%)
+summarySE <- function(data=NULL, measurevar, groupvars=NULL, na.rm=FALSE,
+                      conf.interval=.95, .drop=TRUE) {
+  library(plyr)
+  # New version of length which can handle NA's: if na.rm==T, don't count them
+  length2 <- function (x, na.rm=FALSE) {
+    if (na.rm) sum(!is.na(x))
+    else       length(x)
+  }
+  # This does the summary. For each group's data frame, return a vector with
+  # N, mean, and sd
+  datac <- ddply(data, groupvars, .drop=.drop,
+                 .fun = function(xx, col) {
+                   c(N    = length2(xx[[col]], na.rm=na.rm),
+                     mean = mean   (xx[[col]], na.rm=na.rm),
+                     sd   = sd     (xx[[col]], na.rm=na.rm)
+                   )
+                 },
+                 measurevar
+  )
+  # Rename the "mean" column    
+  datac <- rename(datac, c("mean" = measurevar))
+  datac$se <- datac$sd / sqrt(datac$N)  # Calculate standard error of the mean
+  # Confidence interval multiplier for standard error
+  # Calculate t-statistic for confidence interval: 
+  # e.g., if conf.interval is .95, use .975 (above/below), and use df=N-1
+  ciMult <- qt(conf.interval/2 + .5, datac$N-1)
+  datac$ci <- datac$se * ciMult
+  return(datac)
+}
+```
+
+#Read in data (all)
+
+```{r}
+AmpsInclPilot<-read.csv(file="all_amplitudes.csv")
+```
+
+Split into High, Med, and Low experiments/assays
+```{r}
+HighInclPilot <- subset(AmpsInclPilot, AmpsInclPilot$Set=="High", na.rm=T)
+MedInclPilot <- subset(AmpsInclPilot, AmpsInclPilot$Set=="Medium", na.rm=T)
+Low<- subset(AmpsInclPilot, AmpsInclPilot$Set=="Low", na.rm=T)
+```
+
+Take out pilot data with low counts
+```{r}
+High <- subset(HighInclPilot, HighInclPilot$AudacityAmp==0.61| HighInclPilot$AudacityAmp==0.49|HighInclPilot$AudacityAmp==0.36|HighInclPilot$AudacityAmp==0.25, na.rm=T)
+Med <- subset(MedInclPilot, MedInclPilot$AudacityAmp==0.01| MedInclPilot$AudacityAmp==0.05|MedInclPilot$AudacityAmp==0.12|MedInclPilot$AudacityAmp==0.25, na.rm=T)
+
+Amps <- rbind(High, Med, Low)
+#NoHighAmps <- rbind(Med, Low)
+```
+
+#High Set
+```{r}
+four<-subset(High, High$Age==4)
+five<-subset(High, High$Age==5)
+six<-subset(High, High$Age==6)
+
+quantile(four$PBKtimehr)
+quantile(five$PBKtimehr)
+quantile(six$PBKtimehr)
+```
+
+```{r}
+hist(High$PropH)
+shapiro.test(High$PropH) #P<<<0.05, so super non-normal and overdispersed binomial data
+```
+
+Fits the beta-binomial model and the chance-corrected beta-binomial model to (over-dispersed) binomial data.
+```{r}
+#betabin in package aod
+bb0<-betabin(cbind(NumHat, EP5-NumHat)~1, ~1, data=High)
+bb1<-betabin(cbind(NumHat, EP5-NumHat)~AmpB, ~1, data=High)
+# ~1 is to factor for overdispersion
+summary(bb1) #phi.(intercept) is a value for overdispersion, which is not actually that bad... 
+anova(bb0, bb1) #likelihood comparisons ### SUPER significant amplitude effect IN GENERAL 
+
+bb61v49<-betabin(cbind(NumHat, EP5-NumHat)~1, ~1, data=High[High$AmpB==2 | High$AmpB==4,])
+bb49v61<-betabin(cbind(NumHat, EP5-NumHat)~AmpB, ~1, data=High[High$AmpB==2 | High$AmpB==4,])
+anova(bb61v49,bb49v61) #amp 0.61 and 0.49 are NOT significantly different
+
+bb49v36<-betabin(cbind(NumHat, EP5-NumHat)~1, ~1, data=High[High$AmpB==4 | High$AmpB==8,])
+bb36v49<-betabin(cbind(NumHat, EP5-NumHat)~AudacityAmp, ~1, data=High[High$AmpB==4 | High$AmpB==8,])
+anova(bb49v36,bb36v49) #amp 0.49 and 0.36 are significantly different
+
+bb36v25<-betabin(cbind(NumHat, EP5-NumHat)~1, ~1, data=High[High$AmpB==8 | High$AmpB==15,])
+bb25v36<-betabin(cbind(NumHat, EP5-NumHat)~AudacityAmp, ~1, data=High[High$AmpB==8 | High$AmpB==15,])
+anova(bb36v25,bb25v36) #amp 0.36 and 0.25 are NOT significantly different
+```
+
+Looking at differences between 4 d embryos
+```{r}
+#betabin in package aod
+bb0<-betabin(cbind(NumHat, EP5-NumHat)~1, ~1, data=four)
+bb1<-betabin(cbind(NumHat, EP5-NumHat)~AmpB, ~1, data=four)
+# ~1 is to factor for overdispersion
+summary(bb1) #phi.(intercept) is a value for overdispersion, which is not actually that bad... 
+anova(bb0, bb1) #likelihood comparisons ### SUPER significant amplitude effect IN GENERAL 
+
+bb61v49<-betabin(cbind(NumHat, EP5-NumHat)~1, ~1, data=four[four$AmpB==2 | four$AmpB==4,])
+bb49v61<-betabin(cbind(NumHat, EP5-NumHat)~AmpB, ~1, data=four[four$AmpB==2 | four$AmpB==4,])
+anova(bb61v49,bb49v61) #amp 0.61 and 0.49 are NOT significantly different
+
+bb49v36<-betabin(cbind(NumHat, EP5-NumHat)~1, ~1, data=four[four$AmpB==4 | four$AmpB==8,])
+bb36v49<-betabin(cbind(NumHat, EP5-NumHat)~AudacityAmp, ~1, data=four[four$AmpB==4 | four$AmpB==8,])
+anova(bb49v36,bb36v49) #amp 0.49 and 0.36 are significantly different
+
+bb36v25<-betabin(cbind(NumHat, EP5-NumHat)~1, ~1, data=four[four$AmpB==8 | four$AmpB==15,])
+bb25v36<-betabin(cbind(NumHat, EP5-NumHat)~AudacityAmp, ~1, data=four[four$AmpB==8 | four$AmpB==15,])
+anova(bb36v25,bb25v36) #amp 0.36 and 0.25 are NOT significantly different
+```
+
+
+Looking at differences between 6 d embryos
+```{r}
+#betabin in package aod
+bb0<-betabin(cbind(NumHat, EP5-NumHat)~1, ~1, data=six)
+bb1<-betabin(cbind(NumHat, EP5-NumHat)~AmpB, ~1, data=six)
+# ~1 is to factor for overdispersion
+summary(bb1) #phi.(intercept) is a value for overdispersion, which is not actually that bad... 
+anova(bb0, bb1) #likelihood comparisons ### SUPER significant amplitude effect IN GENERAL 
+
+bb61v49<-betabin(cbind(NumHat, EP5-NumHat)~1, ~1, data=six[six$AmpB==2 | six$AmpB==4,])
+bb49v61<-betabin(cbind(NumHat, EP5-NumHat)~AmpB, ~1, data=six[six$AmpB==2 | six$AmpB==4,])
+anova(bb61v49,bb49v61) #amp 0.61 and 0.49 are NOT significantly different
+
+bb49v36<-betabin(cbind(NumHat, EP5-NumHat)~1, ~1, data=six[six$AmpB==4 | six$AmpB==8,])
+bb36v49<-betabin(cbind(NumHat, EP5-NumHat)~AudacityAmp, ~1, data=six[six$AmpB==4 | six$AmpB==8,])
+anova(bb49v36,bb36v49) #amp 0.49 and 0.36 are significantly different
+
+bb36v25<-betabin(cbind(NumHat, EP5-NumHat)~1, ~1, data=six[six$AmpB==8 | six$AmpB==15,])
+bb25v36<-betabin(cbind(NumHat, EP5-NumHat)~AudacityAmp, ~1, data=six[six$AmpB==8 | six$AmpB==15,])
+anova(bb36v25,bb25v36) #amp 0.36 and 0.25 are NOT significantly different
+```
+
+Making the figure of the high amplitudes
+```{r}
+propherrorstats <- summarySE(High, measurevar="PropH", groupvars=c("AmpB", "AgeGroup"), na.rm=T)
+
+#cols=wes_palette("FantasticFox1")
+
+propherrorstats$AgeGroup<-as.factor(propherrorstats$AgeGroup)
+ggplot(propherrorstats, aes(x=AmpB, y=PropH, group = AgeGroup)) +
+  geom_errorbar(aes(ymin=PropH-se, ymax=PropH+se), width=.1) +
+  geom_line(size=1, aes(linetype=AgeGroup)) +
+  geom_point(size=3, cex= 4, shape=21, fill="white")+
+  cowplot::theme_cowplot() +
+  theme(panel.grid.major = element_blank(), panel.grid.minor = element_blank())+
+  theme(axis.line.x = element_line(),
+        axis.line.y = element_line(), legend.position = c(0.13,.82))+
+  scale_y_continuous(limits = c(0, 1)) +
+  scale_x_continuous(breaks= c(2,4,8,15), labels = c("2","4","8","15"))+
+  #scale_color_manual(values=cols[1:3], name=NULL, labels=c("4d", "5d", "6d"))+
+  ylab("Proportion Hatched\n") +  
+  xlab(bquote('Amplitude' ~ '(m/' ~ s^{2} ~ ')')) 
+```
+
+Making the figure of the latency to hatch for the high amplitudes
+```{r}
+ltoherrorstats <- summarySE(High, measurevar="LtoH", groupvars=c("AmpB", "AgeGroup"), na.rm=T)
+
+cols=wes_palette("FantasticFox1")
+
+ltoherrorstats$AgeGroup<-as.factor(ltoherrorstats$AgeGroup)
+ggplot(ltoherrorstats, aes(x=AmpB, y=LtoH, colour = AgeGroup)) +
+  geom_errorbar(aes(ymin=LtoH-se, ymax=LtoH+se), width=.1) +
+  geom_line(size=1) +
+  geom_point(size=3, cex= 4, shape=21, fill="white")+
+  cowplot::theme_cowplot() +
+  theme(panel.grid.major = element_blank(), panel.grid.minor = element_blank())+
+  theme(axis.line.x = element_line(),
+        axis.line.y = element_line(), legend.position = c(0.13,.82))+
+  scale_x_continuous(breaks= c(2,4,8,15), labels = c("2","4","8","15"))+
+  scale_color_manual(values=cols[1:3], name=NULL, labels=c("4d", "5d", "6d"))+
+  ylab("Latency to Hatch (min)\n") + 
+  xlab(bquote('Amplitude' ~ '(m/' ~ s^{2} ~ ')'))
+```
+#Med Set
+
+```{r}
+hist(Med$PropH)
+shapiro.test(Med$PropH) #P<<<0.05, so super non-normal and overdispersed binomial data
+```
+
+Fits the beta-binomial model and the chance-corrected beta-binomial model to (over-dispersed) binomial data.
+```{r}
+#betabin in package aod
+bb0<-betabin(cbind(NumHat, EP5-NumHat)~1, ~1, data=Med)
+bb1<-betabin(cbind(NumHat, EP5-NumHat)~AmpB, ~1, data=Med)
+# ~1 is to factor for overdispersion
+summary(bb1) #phi.(intercept) is a value for overdispersion, which is not actually that bad... 
+anova(bb0, bb1) #likelihood comparisons ### SUPER significant amplitude effect IN GENERAL 
+
+bb15v30<-betabin(cbind(NumHat, EP5-NumHat)~1, ~1, data=Med[Med$AmpB==0.15 | Med$AmpB==0.30,])
+bb30v15<-betabin(cbind(NumHat, EP5-NumHat)~AmpB, ~1, data=Med[Med$AmpB==0.15 | Med$AmpB==0.30,])
+anova(bb15v30,bb30v15) #amps are not significantly different
+
+bb30v80<-betabin(cbind(NumHat, EP5-NumHat)~1, ~1, data=Med[Med$AmpB==0.30 | Med$AmpB==0.8,])
+bb80v30<-betabin(cbind(NumHat, EP5-NumHat)~AmpB, ~1, data=Med[Med$AmpB==0.30 | Med$AmpB==0.8,])
+anova(bb30v80,bb80v30) #amps are not significantly different
+
+bb80v2<-betabin(cbind(NumHat, EP5-NumHat)~1, ~1, data=Med[Med$AmpB==0.8 | Med$AmpB==2,])
+bb2v80<-betabin(cbind(NumHat, EP5-NumHat)~AmpB, ~1, data=Med[Med$AmpB==0.8 | Med$AmpB==2,])
+anova(bb80v2,bb2v80) #amps are NOT significantly different
+```
+
+Making the figure of the Med amplitudes
+```{r}
+propherrorstats <- summarySE(Med, measurevar="PropH", groupvars=c("AmpB", "AgeGroup"), na.rm=T)
+
+cols=wes_palette("FantasticFox1")
+
+propherrorstats$Amp<-as.numeric(as.character(propherrorstats$AmpB))
+ggplot(propherrorstats, aes(x=AmpB, y=PropH)) +
+  geom_errorbar(aes(ymin=PropH-se, ymax=PropH+se), width=.1) +
+  geom_line(size=1) +
+  geom_point(size=3, cex= 4, shape=21, fill="white")+
+  cowplot::theme_cowplot() +
+  theme(panel.grid.major = element_blank(), panel.grid.minor = element_blank())+
+  theme(axis.line.x = element_line(),
+        axis.line.y = element_line())+
+  scale_x_continuous(breaks= c(0.15, 0.3, 0.8, 2), labels = c("0.15", "0.3", "0.8", "2"))+
+  ylab("Proportion Hatched\n") +  
+  xlab(bquote('Amplitude' ~ '(m/' ~ s^{2} ~ ')')) 
+```
+
+Making the figure of latencies for the Med amplitudes
+```{r}
+ltoherrorstats <- summarySE(Med, measurevar="LtoH", groupvars=c("AmpB", "AgeGroup"), na.rm=T)
+
+ltoherrorstats$Amp<-as.numeric(as.character(ltoherrorstats$AmpB))
+ggplot(ltoherrorstats, aes(x=AmpB, y=LtoH)) +
+  geom_errorbar(aes(ymin=LtoH-se, ymax=LtoH+se), width=.1) +
+  geom_line(size=1) +
+  geom_point(size=3, cex= 4, shape=21, fill="white")+
+  cowplot::theme_cowplot() +
+  theme(panel.grid.major = element_blank(), panel.grid.minor = element_blank())+
+  theme(axis.line.x = element_line(),
+        axis.line.y = element_line())+
+  scale_x_continuous(breaks= c(0.15, 0.3, 0.8, 2), labels = c("0.15", "0.3", "0.8", "2"))+
+  ylab("Latency to Hatch (mins)\n") +  
+  xlab(bquote('Amplitude' ~ '(m/' ~ s^{2} ~ ')')) 
+```
+
+#Low Set
+
+```{r}
+hist(Low$PropH)
+shapiro.test(Low$PropH) #P<<<0.05, so super non-normal and overdispersed binomial data
+```
+
+Fits the beta-binomial model and the chance-corrected beta-binomial model to (over-dispersed) binomial data.
+```{r}
+#betabin in package aod
+bb0<-betabin(cbind(NumHat, EP5-NumHat)~1, ~1, data=Low)
+bb1<-betabin(cbind(NumHat, EP5-NumHat)~AmpB, ~1, data=Low)
+# ~1 is to factor for overdispersion
+summary(bb1) #phi.(intercept) is a value for overdispersion, which is not actually that bad... 
+anova(bb0, bb1) #likelihood comparisons ### SUPER significant amplitude effect IN GENERAL 
+
+bb05v10<-betabin(cbind(NumHat, EP5-NumHat)~1, ~1, data=Low[Low$AmpB==0.05 | Low$AmpB==0.10,])
+bb10v05<-betabin(cbind(NumHat, EP5-NumHat)~AmpB, ~1, data=Low[Low$AmpB==0.05 | Low$AmpB==0.10,])
+anova(bb05v10,bb10v05) #amps are significantly different
+
+bb10v20<-betabin(cbind(NumHat, EP5-NumHat)~1, ~1, data=Low[Low$AmpB==0.10 | Low$AmpB==0.20,])
+bb20v10<-betabin(cbind(NumHat, EP5-NumHat)~AmpB, ~1, data=Low[Low$AmpB==0.10 | Low$AmpB==0.20,])
+anova(bb10v20,bb20v10) #amps are not significantly different
+
+bb2v17<-betabin(cbind(NumHat, EP5-NumHat)~1, ~1, data=Low[Low$AmpB==0.2 | Low$AmpB==1.7,])
+bb17v2<-betabin(cbind(NumHat, EP5-NumHat)~AmpB, ~1, data=Low[Low$AmpB==0.2 | Low$AmpB==1.7,])
+anova(bb2v17,bb17v2) #amps are NOT significantly different
+```
+
+Making the figure of the Low amplitudes
+```{r}
+propherrorstats <- summarySE(Low, measurevar="PropH", groupvars=c("AmpB", "AgeGroup"), na.rm=T)
+
+cols=wes_palette("FantasticFox1")
+
+propherrorstats$AmpB<-as.numeric(as.character(propherrorstats$AmpB))
+ggplot(propherrorstats, aes(x=AmpB, y=PropH)) +
+  geom_errorbar(aes(ymin=PropH-se, ymax=PropH+se), width=.1) +
+  geom_line(size=1) +
+  geom_point(size=3, cex= 4, shape=21, fill="white")+
+  cowplot::theme_cowplot() +
+  theme(panel.grid.major = element_blank(), panel.grid.minor = element_blank())+
+  theme(axis.line.x = element_line(),
+        axis.line.y = element_line())+
+  #scale_x_continuous(breaks= c(0.05, 0.09, 0.12, 0.15, 1.7), labels = c("0.05", "0.09", "0.12", "0.15", "1.7"))+
+  ylab("Proportion Hatched\n") +  
+  xlab(bquote('Amplitude' ~ '(m/' ~ s^{2} ~ ')')) 
+```
+
+Making the figure of latencies for the low amplitudes
+```{r}
+ltoherrorstats <- summarySE(Low, measurevar="LtoH", groupvars=c("AmpB", "AgeGroup"), na.rm=T)
+
+ltoherrorstats$AmpB<-as.numeric(as.character(ltoherrorstats$AmpB))
+ggplot(ltoherrorstats, aes(x=AmpB, y=LtoH)) +
+  geom_errorbar(aes(ymin=LtoH-se, ymax=LtoH+se), width=.1) +
+  geom_line(size=1) +
+  geom_point(size=3, cex= 4, shape=21, fill="white")+
+  cowplot::theme_cowplot() +
+  theme(panel.grid.major = element_blank(), panel.grid.minor = element_blank())+
+  theme(axis.line.x = element_line(),
+        axis.line.y = element_line())+
+  #scale_x_continuous(breaks= c(0.05, 0.09, 0.12, 0.15, 1.7), labels = c("0.05", "0.09", "0.12", "0.15", "1.7"))+
+  ylab("Latency to Hatch (mins)\n") +  
+  xlab(bquote('Amplitude' ~ '(m/' ~ s^{2} ~ ')')) 
+```
+
+#Combined Set
+
+```{r}
+hist(Amps$PropH)
+shapiro.test(Amps$PropH) #P<<<0.05, so super non-normal and overdispersed binomial data
+
+propherrorstats <- summarySE(Amps, measurevar="PropH", groupvars=c("AmpB", "AgeGroup"), na.rm=T)
+```
+
+Fits the beta-binomial model and the chance-corrected beta-binomial model to (over-dispersed) binomial data.
+```{r}
+#betabin in package aod
+bb0<-betabin(cbind(NumHat, EP5-NumHat)~1, ~1, data=Amps)
+bb1<-betabin(cbind(NumHat, EP5-NumHat)~AmpB, ~1, data=Amps)
+# ~1 is to factor for overdispersion
+summary(bb1) #phi.(intercept) is a value for overdispersion, which is not actually that bad... 
+anova(bb0, bb1) #likelihood comparisons ### SUPER significant amplitude effect IN GENERAL 
+
+bb05v10<-betabin(cbind(NumHat, EP5-NumHat)~1, ~1, data=Amps[Amps$AmpB==0.05 | Amps$AmpB==0.10,])
+bb10v05<-betabin(cbind(NumHat, EP5-NumHat)~AmpB, ~1, data=Amps[Amps$AmpB==0.05 | Amps$AmpB==0.10,])
+anova(bb05v10,bb10v05) #amps are significantly different
+
+bb10v15<-betabin(cbind(NumHat, EP5-NumHat)~1, ~1, data=Amps[Amps$AmpB==0.10 | Amps$AmpB==0.15,])
+bb15v10<-betabin(cbind(NumHat, EP5-NumHat)~AmpB, ~1, data=Amps[Amps$AmpB==0.10 | Amps$AmpB==0.15,])
+anova(bb10v15,bb15v10) #amps are significantly different
+
+bb15v20<-betabin(cbind(NumHat, EP5-NumHat)~1, ~1, data=Amps[Amps$AmpB==0.15 | Amps$AmpB==0.2,])
+bb20v15<-betabin(cbind(NumHat, EP5-NumHat)~AmpB, ~1, data=Amps[Amps$AmpB==0.15 | Amps$AmpB==0.2,])
+anova(bb15v20,bb20v15) #amps are significantly different
+
+bb2v3<-betabin(cbind(NumHat, EP5-NumHat)~1, ~1, data=Amps[Amps$AmpB==0.2 | Amps$AmpB==0.3,])
+bb3v2<-betabin(cbind(NumHat, EP5-NumHat)~AmpB, ~1, data=Amps[Amps$AmpB==0.2 | Amps$AmpB==0.3,])
+anova(bb2v3,bb3v2) #amps are significantly different
+
+bb3v8<-betabin(cbind(NumHat, EP5-NumHat)~1, ~1, data=Amps[Amps$AmpB==0.3 | Amps$AmpB==0.8,])
+bb8v3<-betabin(cbind(NumHat, EP5-NumHat)~AmpB, ~1, data=Amps[Amps$AmpB==0.3 | Amps$AmpB==0.8,])
+anova(bb3v8,bb8v3) #amps are significantly different
+
+bb8v17<-betabin(cbind(NumHat, EP5-NumHat)~1, ~1, data=Amps[Amps$AmpB==0.8 | Amps$AmpB==1.7,])
+bb17v8<-betabin(cbind(NumHat, EP5-NumHat)~AmpB, ~1, data=Amps[Amps$AmpB==0.8 | Amps$AmpB==1.7,])
+anova(bb8v17,bb17v8) #amps are significantly different
+
+bb17v20<-betabin(cbind(NumHat, EP5-NumHat)~1, ~1, data=Amps[Low$AmpB==1.7 | five$AmpB==2,])
+bb20v17<-betabin(cbind(NumHat, EP5-NumHat)~AmpB, ~1, data=Amps[Low$AmpB==1.7 | five$AmpB==2,])
+anova(bb17v20,bb20v17) #amps are significantly different
+
+bb20v40<-betabin(cbind(NumHat, EP5-NumHat)~1, ~1, data=five[five$AmpB==2 | five$AmpB==4,])
+bb40v20<-betabin(cbind(NumHat, EP5-NumHat)~AmpB, ~1, data=five[five$AmpB==2 | five$AmpB==4,])
+anova(bb20v40,bb40v20) #amps are significantly different
+
+bb4v8<-betabin(cbind(NumHat, EP5-NumHat)~1, ~1, data=five[five$AmpB==4 | five$AmpB==8,])
+bb8v4<-betabin(cbind(NumHat, EP5-NumHat)~AmpB, ~1, data=five[five$AmpB==4 | five$AmpB==8,])
+anova(bb4v8,bb8v4) #amps are significantly different
+
+bb8v15<-betabin(cbind(NumHat, EP5-NumHat)~1, ~1, data=five[five$AmpB==8 | five$AmpB==15,])
+bb15v8<-betabin(cbind(NumHat, EP5-NumHat)~AmpB, ~1, data=five[five$AmpB==8 | five$AmpB==15,])
+anova(bb8v15,bb15v8) #amps are significantly different
+```
+
+Making the figure with combined datasets (high, med, low) & on a log scale. 
+```{r}
+Amps$LogAmpB<-log(Amps$AmpB)
+propherrorstats <- summarySE(Amps, measurevar="PropH", groupvars=c("LogAmpB", "AgeGroup"), na.rm=T)
+
+cols=wes_palette("FantasticFox1")
+
+propherrorstats$AgeGroup<-as.factor(propherrorstats$AgeGroup)
+ggplot(propherrorstats, aes(x=LogAmpB, y=PropH, Group = AgeGroup)) +
+  geom_errorbar(aes(ymin=PropH-se, ymax=PropH+se), width=.1) +
+  geom_line(size=1, aes(linetype=AgeGroup)) +
+  geom_point(size=3, cex= 4, shape=21, fill="white")+
+  cowplot::theme_cowplot() +
+  theme(panel.grid.major = element_blank(), panel.grid.minor = element_blank())+
+  theme(axis.line.x = element_line(),
+        axis.line.y = element_line(), legend.position = c(0.13,.82))+
+  scale_y_continuous(limits = c(0, 1)) +
+  #scale_x_continuous(breaks= c(2, 4, 8, 15), labels = c("2",  "4", "8", "15"))+
+  #scale_color_manual(values=cols[1:3], name=NULL, labels=c("4d", "5d", "6d"))+
+  ylab("Proportion Hatched\n") +  
+  xlab(bquote('Amplitude' ~ '(m/' ~ s^{2} ~ ', log scale'~')')) 
+
+```
+
+```{r}
+ltoherrorstats <- summarySE(Amps, measurevar="LtoH", groupvars=c("LogAmpB", "AgeGroup"), na.rm=T)
+
+ltoherrorstats$AgeGroup<-as.factor(ltoherrorstats$AgeGroup)
+ggplot(ltoherrorstats, aes(x=LogAmpB, y=LtoH, colour = AgeGroup)) +
+  geom_errorbar(aes(ymin=LtoH-se, ymax=LtoH+se), width=.1) +
+  geom_line(size=1) +
+  geom_point(size=3, cex= 4, shape=21, fill="white")+
+  cowplot::theme_cowplot() +
+  theme(panel.grid.major = element_blank(), panel.grid.minor = element_blank())+
+  theme(axis.line.x = element_line(),
+        axis.line.y = element_line(), legend.position = c(0.73,.82))+
+  scale_color_manual(values=cols[1:3], name=NULL, labels=c("4d", "5d", "6d"))+
+  ylab("Latency to Hatch (mins)\n") +  
+  xlab(bquote('Amplitude' ~ '(m/' ~ s^{2} ~ ', log scale'~')')) 
+```
